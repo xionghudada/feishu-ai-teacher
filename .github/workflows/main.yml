@@ -1,0 +1,45 @@
+name: AI 老师自动批改作业
+
+on:
+  # 允许手动点击按钮触发 (方便你测试)
+  workflow_dispatch:
+  
+  # 定时任务
+  schedule:
+    # 1. 周一至周五
+    # 北京时间 12:30 突击检查 (UTC 04:30)
+    - cron: '30 4 * * 1-5'
+    
+    # 北京时间 17:00 - 23:30，每40分钟一次 (UTC 09:00 - 15:30)
+    - cron: '*/40 9-15 * * 1-5'
+
+    # 2. 周六、周日
+    # 北京时间 11:00 - 22:00，每小时一次 (UTC 03:00 - 14:00)
+    - cron: '0 3-14 * * 6,0'
+
+jobs:
+  grade_homework:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: 拉取代码
+      uses: actions/checkout@v3
+      
+    - name: 设置 Python 环境
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.9'
+        
+    - name: 安装依赖库
+      run: |
+        pip install -r requirements.txt
+        
+    - name: 运行批改脚本
+      env:
+        # 这里就是把保险箱里的密码取出来给代码用
+        APP_ID: ${{ secrets.APP_ID }}
+        APP_SECRET: ${{ secrets.APP_SECRET }}
+        APP_TOKEN: ${{ secrets.APP_TOKEN }}
+        TABLE_ID: ${{ secrets.TABLE_ID }}
+        AI_API_KEY: ${{ secrets.AI_API_KEY }}
+      run: python main.py
