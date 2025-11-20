@@ -1,0 +1,46 @@
+name: 每天定时清空表格
+
+on:
+  # 定时任务
+  schedule:
+    # -------------------------------------------------------
+    # 1. 周一至周五 (Mon-Fri)
+    # 北京时间 17:00 清空 (对应 UTC 09:00)
+    # 目的：清空前一晚的数据，迎接今晚新作业
+    # ⚠️ 前提：老师必须在 16:50 前完成本地备份！
+    # -------------------------------------------------------
+    - cron: '0 9 * * 1-5'
+
+    # -------------------------------------------------------
+    # 2. 周六 (Saturday)
+    # 北京时间 24:00 (周日凌晨0点) 清空 (对应 UTC 16:00)
+    # -------------------------------------------------------
+    - cron: '0 16 * * 6'
+
+  # 允许手动点击按钮触发 (万一你需要临时清空)
+  workflow_dispatch:
+
+jobs:
+  clear_data:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: 拉取代码
+      uses: actions/checkout@v3
+      
+    - name: 设置 Python 环境
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.9'
+        
+    - name: 安装依赖库
+      run: pip install lark-oapi
+      
+    - name: 执行清空脚本
+      env:
+        # 复用你之前设置好的密码，不用重新填
+        APP_ID: ${{ secrets.APP_ID }}
+        APP_SECRET: ${{ secrets.APP_SECRET }}
+        APP_TOKEN: ${{ secrets.APP_TOKEN }}
+        TABLE_ID: ${{ secrets.TABLE_ID }}
+      run: python clear_data.py
