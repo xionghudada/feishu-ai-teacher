@@ -17,10 +17,10 @@ TABLE_ID = os.getenv("TABLE_ID")
 AI_API_KEY = os.getenv("AI_API_KEY")
 
 # 🔗 AI 服务地址 (通常固定，也可改为环境变量)
-AI_API_BASE = "https://ai.hybgzs.com/v1/chat/completions"
+AI_API_BASE = "https://x666.me/v1/chat/completions"
 
-# 🤖 模型选择 (保持你选择的 1.5-pro)
-AI_MODEL = "gemini-2.5-pro"
+# 🤖 模型选择 (保持你选择的 2.5-flash)
+AI_MODEL = "gemini-2.5-pro-1m"
 
 # 📋 字段映射配置
 FIELD_IMG = "上传作文图片"      
