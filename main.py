@@ -7,10 +7,10 @@ import io
 from PIL import Image, ImageOps
 import time
 import os
-import re  # 👈 用于正则清洗
+import re  # 👈 正则模块，用于强力清洗
 
 # ================= 🟢 环境变量配置 =================
-# 这里的变量会自动从 GitHub Secrets 读取，不需要手动填写
+# 这些变量会自动从 GitHub Secrets 读取，无需在此处手动填写
 APP_ID = os.getenv("APP_ID")
 APP_SECRET = os.getenv("APP_SECRET")
 APP_TOKEN = os.getenv("APP_TOKEN")
@@ -57,9 +57,10 @@ def compress_image(image_binary, max_side=1024, quality=60):
 
 def clean_ai_output(text):
     """
-    🧹 V8.1 强力清洗逻辑：
+    🧹 V8.2 强力清洗逻辑 (针对图片案例特调版)：
     1. 物理删除 'A改为A' 的废话。
-    2. 物理拦截 '小子->小刀' 这类过度推理。
+    2. 物理拦截 '小子->小刀' (语义过度)。
+    3. 物理拦截 '及和->和' (连笔误判)。
     """
     if not text: return text
     
@@ -69,15 +70,31 @@ def clean_ai_output(text):
     # 正则匹配模式：[xxx] 应改为 [yyy]
     pattern = re.compile(r'\[(.*?)\]\s*应改为\s*\[(.*?)\]')
     
-    # 🚫 黑名单：如果出现这些过度纠错，直接拦截
-    # 逻辑：有些字长得完全不像，OCR识别错了，AI却强行根据语义去改，这种情况要拦截
+    # 🚫 V8.2 黑名单扩容：把所有常见的 OCR 连笔、误读都加进去
+    # 只要 AI 报出下面这些修改建议，代码会直接拦截，不让它出现在评语里
     blacklist_pairs = [
+        # 语义过度联想类 (OCR识别错字形，AI强行改语义)
         ("小子", "小刀"),
         ("小子", "大刀"),
-        ("几乎", "几乎"), # 防止正则漏掉
+        ("小子", "镰刀"),
+        
+        # 连笔/多字误判类 (本次修复重点)
+        ("及和", "和"), 
+        ("京尤", "就"),
+        ("口乞", "吃"),
+        ("To申", "神"),
+        ("To", "神"),
+        
+        # 数字/符号类
+        ("ー", "一"),
+        ("—", "一"),
+        ("-", "一"),
+        
+        # 废话类
+        ("几乎", "几乎"),
     ]
     
-    print("   🧹 正在执行代码级清洗...")
+    print("   🧹 正在执行代码级清洗 (V8.2)...")
     
     for line in lines:
         match = pattern.search(line)
@@ -95,14 +112,30 @@ def clean_ai_output(text):
             # 🛑 规则2：黑名单拦截 (针对 AI 的“聪明反被聪明误”)
             for bad_orig, bad_corr in blacklist_pairs:
                 if original == bad_orig and corrected == bad_corr:
-                    print(f"      🛡️ 拦截过度推理: '{original}' -> '{corrected}' (判定为OCR错误，强制忽略)")
+                    print(f"      🛡️ 拦截连笔/过度推理: '{original}' -> '{corrected}' (判定为OCR干扰，强制忽略)")
                     should_skip = True
                     break
         
         if not should_skip:
             cleaned_lines.append(line)
+            
+    # 二次检查：如果清洗后，【一、字词体检】下面直接变成了【二、句子优化】（说明错字都被删光了）
+    # 我们需要补一句“字迹工整”的夸奖，否则格式会很怪
+    final_text = '\n'.join(cleaned_lines)
+    
+    # 简单检测：如果"字词体检"后紧接着就是"句子优化"（中间没有内容了）
+    if "一、字词体检" in final_text and "二、句子优化" in final_text:
+        start = final_text.find("一、字词体检") + len("一、字词体检")
+        end = final_text.find("二、句子优化")
+        content_between = final_text[start:end].strip()
         
-    return '\n'.join(cleaned_lines)
+        # 如果中间空了（或者只剩换行符），说明唯一的错字被我们删了
+        if not content_between:
+            print("      ✨ 错字已全部拦截，自动补充夸奖语")
+            insert_msg = "\n🎉 字迹工整，没有发现错别字，写得很认真！\n"
+            final_text = final_text[:start] + insert_msg + final_text[end:]
+
+    return final_text
 
 def call_ai_api_with_retry(image_b64_list, prompt, max_retries=3, temperature=0.1):
     """
@@ -154,7 +187,7 @@ def call_ai_api_with_retry(image_b64_list, prompt, max_retries=3, temperature=0.
     return None
 
 def main():
-    print("🚀 云端脚本启动 (V8.1 语义误判防御版)...")
+    print("🚀 云端脚本启动 (V8.2 连笔字防御版)...")
     
     if not APP_ID or not AI_API_KEY:
         print("❌ 错误：未读取到环境变量，请检查 GitHub Secrets 配置！")
@@ -223,29 +256,31 @@ def main():
             print("   ⚠️ 图片列表为空，跳过。")
             continue
 
-        # 3. 调用 AI (注入 V8.1 终极提示词)
+        # 3. 调用 AI (注入 V8.2 终极提示词)
         print(f"   🧠 AI ({AI_MODEL}) 正在思考...")
         
-        # 👇👇👇 V8.1 提示词：针对“语义过度联想”进行了特训 👇👇👇
+        # 👇👇👇 V8.2 提示词：含所有经典反面教材 (小子/及和/几乎) 👇👇👇
         prompt = """
-# 小学作文批改主控指令 (Master Prompt) v8.1
-# 核心目标：100% 杜绝 OCR 误判和过度语义联想
+# 小学作文批改主控指令 (Master Prompt) v8.2
+# 核心目标：100% 杜绝 OCR 误判、过度语义联想和连笔误认
 
 ## Role (角色设定)
-你是一位严格的 AI 助教。你的任务是发现亮点，仅修正**字形明显错误**的错别字，绝不能“无中生有”。
+你是一位严格的 AI 助教。你的任务是发现亮点，仅修正**字形明显错误**的错别字，绝不能“无中生有”或“吹毛求疵”。
 
 ## I. 绝对防御机制 (Pre-flight Firewall)
 
 1.  **数字防御（一 ≠ ー）**：
     * 看见 "ー只"、"—个"、"-个"，必须默认为 "一只"、"一个"。**严禁报错**。
 
-2.  **同字防御（神 ≠ 神）**：
+2.  **同字防御（A ≠ A）**：
     * **严禁**输出 `[原文] 应改为 [原文]`。如果汉字完全一样，必须直接删除该条目。
 
 3.  **禁止语义强改（核心规则·针对“小子/小刀”案）**：
     * **严禁根据上下文“猜”字**。
-    * **例子**：虽然文中后面提到了“镰刀”，但如果学生写的是“小子”（或者是OCR识别成了“小子”），且“子”和“刀”的字形相差巨大，**严禁**改为“小刀”。
-    * **理由**：这通常是OCR把“虫子”或“样子”识别错了，而不是学生真的写了“小刀”的错别字。此时应**保持沉默**，不要强行纠错。
+    * **例子**：虽然文中后面提到了“镰刀”，但如果学生写的是“小子”（OCR识别），且“子”和“刀”字形相差巨大，**严禁**改为“小刀”。这是OCR错误，应保持沉默。
+
+4.  **连笔防御（及和 ≠ 及和）**：
+    * 看见“及和”出现在“绿叶丛中”这种语境下，这是“和”字的连笔误认，**严禁**改为“和”，应视为学生写对了。
 
 ## II. 典型案例教学 (Few-Shot - 严格模仿)
 
@@ -255,17 +290,18 @@ def main():
 * ❌ [几乎] 应改为 [几乎] -> **必须删除！**
 * ✅ (什么都不输出)
 
-### 案例 2：OCR 误识别“一”（绝对禁止）
-* ❌ [ー] 应改为 [一] -> **必须删除！**
+### 案例 2：连笔误判（绝对禁止·针对“及和”案）
+* **场景**：几乎**及和**绿叶融为一体。
+* ❌ [及和] 应改为 [和] -> **必须删除！(这是OCR把连笔认成了两个字，学生没写错)**
 * ✅ (什么都不输出)
 
-### 案例 3：过度语义联想（绝对禁止·针对性训练）
-* **场景**：原文 OCR 识别为“螳螂挥舞着**小子**”，后文有“镰刀”。
+### 案例 3：过度语义联想（绝对禁止·针对“小子”案）
+* **场景**：螳螂挥舞着**小子**。（后文有镰刀）
 * ❌ [小子] 应改为 [小刀] -> **必须删除！(这是OCR错误，严禁强改)**
 * ✅ (什么都不输出，或者在书写建议里委婉提醒)
 
-### 案例 4：连笔误判
-* ❌ [及和] 应改为 [和] -> **必须删除！**
+### 案例 4：OCR 误识别“一”（绝对禁止）
+* ❌ [ー] 应改为 [一] -> **必须删除！**
 * ✅ (什么都不输出)
 
 ### 案例 5：真实的错别字（只有这种才保留）
