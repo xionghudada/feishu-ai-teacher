@@ -19,7 +19,7 @@ AI_API_KEY = os.getenv("AI_API_KEY")
 
 # 🔗 AI 服务配置
 AI_API_BASE = "https://privnode.com/v1/chat/completions"
-AI_MODEL = "gemini-3-pro-preview"
+AI_MODEL = "gemini-2.5-pro"
 
 # 📋 飞书多维表格字段配置
 FIELD_IMG = "上传作文图片"      
