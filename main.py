@@ -7,21 +7,21 @@ import io
 from PIL import Image, ImageOps
 import time
 import os
+import re  # 👈 用于正则清洗
 
-# ================= 🟢 环境变量配置 (云端安全模式) =================
+# ================= 🟢 环境变量配置 =================
+# 这里的变量会自动从 GitHub Secrets 读取，不需要手动填写
 APP_ID = os.getenv("APP_ID")
 APP_SECRET = os.getenv("APP_SECRET")
 APP_TOKEN = os.getenv("APP_TOKEN")
 TABLE_ID = os.getenv("TABLE_ID")
 AI_API_KEY = os.getenv("AI_API_KEY")
 
-# 🔗 AI 服务地址
+# 🔗 AI 服务配置
 AI_API_BASE = "https://x666.me/v1/chat/completions"
-
-# 🤖 模型选择
 AI_MODEL = "gemini-2.5-flash"
 
-# 📋 字段映射配置
+# 📋 飞书多维表格字段配置
 FIELD_IMG = "上传作文图片"      
 FIELD_RESULT = "评语"          
 FIELD_STATUS = "单选"          
@@ -33,10 +33,14 @@ STATUS_DONE = "已完成"
 client = lark.Client.builder().app_id(APP_ID).app_secret(APP_SECRET).build()
 
 def compress_image(image_binary, max_side=1024, quality=60):
-    """ 图片压缩：限制长边 1024px，转 JPEG 压缩质量 60，且自动扶正方向 """
+    """
+    图片压缩处理：限制尺寸、自动扶正方向、转为 JPEG Base64
+    """
     try:
         img = Image.open(io.BytesIO(image_binary))
-        img = ImageOps.exif_transpose(img) # 自动扶正
+        # 🔄 关键：根据 EXIF 信息自动旋转图片（解决手机拍照倒置问题）
+        img = ImageOps.exif_transpose(img)
+
         if img.mode in ("RGBA", "P"): img = img.convert("RGB")
         
         w, h = img.size
@@ -51,10 +55,60 @@ def compress_image(image_binary, max_side=1024, quality=60):
         print(f"   ❌ 图片压缩出错: {e}")
         return None
 
-def call_ai_api_with_retry(image_b64_list, prompt, max_retries=3, temperature=0.2):
-    """ 
-    🛡️ 带重试机制 + 温度控制的 API 调用 
-    temperature=0.2: 让 AI 极度冷静，严格遵守逻辑，减少 OCR 幻觉
+def clean_ai_output(text):
+    """
+    🧹 V8.1 强力清洗逻辑：
+    1. 物理删除 'A改为A' 的废话。
+    2. 物理拦截 '小子->小刀' 这类过度推理。
+    """
+    if not text: return text
+    
+    cleaned_lines = []
+    lines = text.split('\n')
+    
+    # 正则匹配模式：[xxx] 应改为 [yyy]
+    pattern = re.compile(r'\[(.*?)\]\s*应改为\s*\[(.*?)\]')
+    
+    # 🚫 黑名单：如果出现这些过度纠错，直接拦截
+    # 逻辑：有些字长得完全不像，OCR识别错了，AI却强行根据语义去改，这种情况要拦截
+    blacklist_pairs = [
+        ("小子", "小刀"),
+        ("小子", "大刀"),
+        ("几乎", "几乎"), # 防止正则漏掉
+    ]
+    
+    print("   🧹 正在执行代码级清洗...")
+    
+    for line in lines:
+        match = pattern.search(line)
+        should_skip = False
+        
+        if match:
+            original = match.group(1).strip()
+            corrected = match.group(2).strip()
+            
+            # 🛑 规则1：硬性拦截 A == B
+            if original == corrected:
+                print(f"      🗑️ 拦截废话: '{original}' -> '{corrected}' (已物理删除)")
+                should_skip = True
+            
+            # 🛑 规则2：黑名单拦截 (针对 AI 的“聪明反被聪明误”)
+            for bad_orig, bad_corr in blacklist_pairs:
+                if original == bad_orig and corrected == bad_corr:
+                    print(f"      🛡️ 拦截过度推理: '{original}' -> '{corrected}' (判定为OCR错误，强制忽略)")
+                    should_skip = True
+                    break
+        
+        if not should_skip:
+            cleaned_lines.append(line)
+        
+    return '\n'.join(cleaned_lines)
+
+def call_ai_api_with_retry(image_b64_list, prompt, max_retries=3, temperature=0.1):
+    """
+    🛡️ 调用 AI 接口：
+    temperature=0.1: 让 AI 极度冷静，严格遵守逻辑
+    clean_ai_output: 调用清洗函数
     """
     headers = {"Authorization": f"Bearer {AI_API_KEY}", "Content-Type": "application/json"}
     
@@ -68,20 +122,21 @@ def call_ai_api_with_retry(image_b64_list, prompt, max_retries=3, temperature=0.
     payload = {
         "model": AI_MODEL,
         "messages": [{"role": "user", "content": content_list}],
-        "temperature": temperature  # 👈 核心修改：加入温度控制
+        "temperature": temperature 
     }
 
     for attempt in range(max_retries):
         try:
-            if attempt > 0: print(f"   🔄 第 {attempt+1} 次重试连接 AI...")
+            if attempt > 0: print(f"   🔄 第 {attempt+1} 次重试...")
             
-            # 调试打印（可选）
-            # print(f"   🧠 发送请求... 温度: {temperature}")
-
+            # print(f"   🧐 发送请求... 温度: {temperature}")
+            
             resp = requests.post(AI_API_BASE, json=payload, headers=headers, timeout=60)
             
             if resp.status_code == 200:
-                return resp.json().get('choices', [{}])[0].get('message', {}).get('content', '')
+                raw_text = resp.json().get('choices', [{}])[0].get('message', {}).get('content', '')
+                # ✅ 在返回前，先清洗一遍
+                return clean_ai_output(raw_text)
             
             elif resp.status_code in [503, 429, 500, 502, 504]:
                 wait_time = 5 * (attempt + 1)
@@ -92,15 +147,14 @@ def call_ai_api_with_retry(image_b64_list, prompt, max_retries=3, temperature=0.
                 print(f"   ❌ API 错误: {resp.status_code} - {resp.text}")
                 return None
                 
-        except requests.exceptions.RequestException as e:
-            print(f"   ⚠️ 网络波动: {e}，准备重试...")
+        except Exception as e:
+            print(f"   ⚠️ 网络/程序错误: {e}")
             time.sleep(3)
             
-    print("   ❌ 重试 3 次均失败，跳过此条。")
     return None
 
 def main():
-    print("🚀 云端脚本启动 (GitHub Actions - v7.5 严谨防御版)...")
+    print("🚀 云端脚本启动 (V8.1 语义误判防御版)...")
     
     if not APP_ID or not AI_API_KEY:
         print("❌ 错误：未读取到环境变量，请检查 GitHub Secrets 配置！")
@@ -169,79 +223,57 @@ def main():
             print("   ⚠️ 图片列表为空，跳过。")
             continue
 
-        # 3. 调用 AI (注入 v7.5 终极提示词)
-        print(f"   🧠 AI ({AI_MODEL}) 正在思考 ({len(b64_images)} 图)...")
+        # 3. 调用 AI (注入 V8.1 终极提示词)
+        print(f"   🧠 AI ({AI_MODEL}) 正在思考...")
         
-        # 👇👇👇 v7.5 提示词 (含正误案例 Few-Shot) 👇👇👇
+        # 👇👇👇 V8.1 提示词：针对“语义过度联想”进行了特训 👇👇👇
         prompt = """
-# 小学作文批改主控指令 (Master Prompt) v7.5
-# 更新：集成正误案例对比 (Few-Shot) + OCR 强容错
+# 小学作文批改主控指令 (Master Prompt) v8.1
+# 核心目标：100% 杜绝 OCR 误判和过度语义联想
 
 ## Role (角色设定)
-你是一位拥有 20 年教龄的小学语文老师，同时也是一位**“OCR 幻觉审核员”**。
-你的核心任务是：
-1.  **过滤机器错误**：识别并自动忽略 OCR 产生的识别乱码（如连笔识别成多字、横线识别成片假名）。
-2.  **保护学生自信**：只指出真正的错别字，绝不把机器的识别错误怪罪到学生头上。
-3.  **温暖教育**：用鼓励的语气，给三年级孩子写出有深度、有细节、带具体行动建议的评语。
+你是一位严格的 AI 助教。你的任务是发现亮点，仅修正**字形明显错误**的错别字，绝不能“无中生有”。
 
----
-
-## I. 核心防御机制 (Pre-flight Firewall)
-
-在输出任何评价前，必须先进行以下逻辑判断：
+## I. 绝对防御机制 (Pre-flight Firewall)
 
 1.  **数字防御（一 ≠ ー）**：
-    * 当看到横线 `ー`、`—`、`-` 出现在量词前（如`ー只`）或表示数字含义时，**必须**将其默认为汉字“一”。**严禁**判为错别字。
-2.  **连笔防御（和 ≠ 及和）**：
-    * 当看到不通顺的词组（如`及和`、`口乞`、`京尤`）时，尝试去掉其中一部分或组合起来。如果组合后（`和`、`吃`、`就`）读得通，则认定为 OCR 误识别了连笔。**严禁**判为错别字。
-3.  **同字防御（神 ≠ 神）**：
-    * **严禁**输出 `[原文] 应改为 [原文]` 的修改建议。如果汉字相同，必须直接删除该条目。
+    * 看见 "ー只"、"—个"、"-个"，必须默认为 "一只"、"一个"。**严禁报错**。
 
----
+2.  **同字防御（神 ≠ 神）**：
+    * **严禁**输出 `[原文] 应改为 [原文]`。如果汉字完全一样，必须直接删除该条目。
 
-## II. 典型案例教学 (Few-Shot Learning · 严格参照)
+3.  **禁止语义强改（核心规则·针对“小子/小刀”案）**：
+    * **严禁根据上下文“猜”字**。
+    * **例子**：虽然文中后面提到了“镰刀”，但如果学生写的是“小子”（或者是OCR识别成了“小子”），且“子”和“刀”的字形相差巨大，**严禁**改为“小刀”。
+    * **理由**：这通常是OCR把“虫子”或“样子”识别错了，而不是学生真的写了“小刀”的错别字。此时应**保持沉默**，不要强行纠错。
+
+## II. 典型案例教学 (Few-Shot - 严格模仿)
 
 **请仔细学习以下【错误案例】与【正确案例】的区别，严禁重犯错误案例中的逻辑！**
 
-### 案例 1：OCR 误识别“一”
-* **原文识别**：我看见了**ー**只小狗。
-* **❌ 错误批改（绝对禁止）**：[ー] 应改为 [一] (理由：这是数字一)
-* **✅ 正确批改（必须执行）**：(系统内部自动修正为“一”，不输出任何错字提示) -> **🎉 字迹工整，没有发现错别字，真棒！**
+### 案例 1：同字互改（绝对禁止）
+* ❌ [几乎] 应改为 [几乎] -> **必须删除！**
+* ✅ (什么都不输出)
 
-### 案例 2：OCR 误识别连笔“及和”
-* **原文识别**：它**及和**绿叶融为一体。
-* **❌ 错误批改（绝对禁止）**：[及和] 应改为 [和] (理由：这里多写了一个字)
-* **✅ 正确批改（必须执行）**：(系统判断“及”是“和”字的连笔残留，自动忽略) -> **句子读起来很顺，老师暂时没有发现需要大改的地方，保持现在的感觉就很好！**
+### 案例 2：OCR 误识别“一”（绝对禁止）
+* ❌ [ー] 应改为 [一] -> **必须删除！**
+* ✅ (什么都不输出)
 
-### 案例 3：OCR 误拆字“京尤”
-* **原文识别**：这**京尤**是我的家。
-* **❌ 错误批改（绝对禁止）**：[京] 应改为 [就]；[尤] 应改为 [就]
-* **✅ 正确批改（必须执行）**：(系统判断“京尤”是“就”字的结构松散，自动合并) -> **🎉 字迹工整，没有发现错别字，真棒！**
+### 案例 3：过度语义联想（绝对禁止·针对性训练）
+* **场景**：原文 OCR 识别为“螳螂挥舞着**小子**”，后文有“镰刀”。
+* ❌ [小子] 应改为 [小刀] -> **必须删除！(这是OCR错误，严禁强改)**
+* ✅ (什么都不输出，或者在书写建议里委婉提醒)
 
-### 案例 4：形近字误判（字迹潦草）
-* **原文识别**：随着音乐**随章**旋转。
-* **❌ 错误批改（绝对禁止）**：[随章] 应改为 [随意] (理由：错别字)
-* **✅ 正确批改（必须执行）**：(系统根据语境推断应为“随意”，判定为书写潦草而非错字) -> **在【一、字词体检】的第二行输出书写建议：[意] (建议：这个字中间要注意，不要写得太像“章”哦)**
+### 案例 4：连笔误判
+* ❌ [及和] 应改为 [和] -> **必须删除！**
+* ✅ (什么都不输出)
 
-### 案例 5：真实的错别字
-* **原文识别**：我们去**功**击敌人。
-* **✅ 正确批改**：**[功击] 应改为 [攻击] (理由：打仗要用“攻”，立功才用“功”)**
+### 案例 5：真实的错别字（只有这种才保留）
+* ✅ [功击] 应改为 [攻击] -> **保留** (理由：打仗要用“攻”)。
 
----
+## III. Output Format (最终输出格式)
 
-## III. 老师评语生成规则
-
-1.  **拒绝套话**：禁止说“结构完整、中心突出”等术语。
-2.  **三明治结构**：
-    * **暖心开场**：一句话读后感。
-    * **细节高光**：必须引用原文 2-3 处具体细节（如“歪头萌”、“云朵睡觉”等童趣表达）。
-    * **行动指令**：针对一个缺点，给出**动词指令**（如“试着加上...”、“改成...”）。
-
----
-
-## IV. Output Format (最终输出格式)
-
-请严格只输出以下三部分，**严禁**使用 Markdown 符号（如 #、*、>），**严禁**输出任何开场白。
+请严格只输出以下三部分，**严禁**使用 Markdown 符号。
 
 一、字词体检
 
@@ -255,15 +287,14 @@ def main():
 问题：[老师猜你是想说……这里读起来有点……]
 建议：[修改后的示范句]
 (若句子整体通顺：句子读起来很顺，老师暂时没有发现需要大改的地方，保持现在的感觉就很好！)
-这个部分找学生作文或日记的2-3处句子进行美化，让学找到写作方向
 
 三、老师评语
 
-[这里输出一段纯文本评语，不要分点，不要换行。内容包含：1.温暖开场；2.引用2处细节表扬；3.给出1个具体的修改行动指令；4.鼓励结尾。字数150-200字，同时可以对学生的作文或日记进行示例性的仿写，让学生找到写作的方向]
+[这里输出一段纯文本评语，不要分点，不要换行。内容包含：1.温暖开场；2.引用2处细节表扬；3.给出1个具体的修改行动指令；4.鼓励结尾。字数150-200字。]
 """
         
-        # 4. 调用 AI (开启 0.2 低温模式，强制执行 Few-Shot 逻辑)
-        ai_comment = call_ai_api_with_retry(b64_images, prompt, temperature=0.2)
+        # 4. 调用 AI (开启 0.1 低温模式 + 代码清洗)
+        ai_comment = call_ai_api_with_retry(b64_images, prompt, temperature=0.1)
         
         if ai_comment:
             print("   ✍️ 写入评语...")
