@@ -19,7 +19,7 @@ AI_API_KEY = os.getenv("AI_API_KEY")
 
 # 🔗 AI 服务配置
 AI_API_BASE = "https://x666.me/v1/chat/completions"
-AI_MODEL = "gemini-2.5-flash"  # 建议使用新版模型，创作能力更强
+AI_MODEL = "gemini-3-flash-preview"  # 建议使用新版模型，创作能力更强
 
 # 📋 飞书多维表格字段配置
 FIELD_IMG = "上传作文图片"      
