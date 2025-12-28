@@ -73,7 +73,7 @@ def call_ai_api_with_retry(image_b64_list, prompt, max_retries=3, temperature=0.
     return None
 
 def main():
-    print("🚀 云端脚本启动 (V10.0 智慧人格化版)...")
+    print("🚀 云端脚本启动 (V10.0 6类人格随机抽取)...")
     
     # 🎭 性格矩阵：每种性格包含专属禁忌和引导语
     personas = [
