@@ -9,7 +9,7 @@ import time
 import os
 import random  # 🆕 导入随机库用于人设抽卡
 
-# ================= 🟢 环境变量配置 =================
+# ================= 环境变量配置 =================
 APP_ID = os.getenv("APP_ID")
 APP_SECRET = os.getenv("APP_SECRET")
 APP_TOKEN = os.getenv("APP_TOKEN")
@@ -34,7 +34,7 @@ def compress_image(image_binary, max_side=1024, quality=60):
     """图片压缩处理：限制尺寸、自动扶正方向、转为 JPEG Base64"""
     try:
         img = Image.open(io.BytesIO(image_binary))
-        img = ImageOps.exif_transpose(img) # 🔄 解决手机拍照倒置
+        img = ImageOps.exif_transpose(img) # 解决手机拍照倒置
         if img.mode in ("RGBA", "P"): img = img.convert("RGB")
         w, h = img.size
         if max(w, h) > max_side:
